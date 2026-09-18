@@ -4,15 +4,14 @@
     "slug": "roxstar",
     "version": "1.0.0",
     "sdkVersion": "57.0.0",
+    "platforms": ["android"],
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "assetBundlePatterns": ["**/*"],
     "android": {
       "package": "com.roxstar.app",
       "permissions": [
-        "android.permission.RECORD_AUDIO",
-        "android.permission.WRITE_EXTERNAL_STORAGE",
-        "android.permission.READ_EXTERNAL_STORAGE"
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "updates": {

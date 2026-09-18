@@ -1,9 +1,13 @@
+import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
 
-// 10.0.2.2 only works for the Android emulator. Physical devices need the host machine's LAN IP.
-const defaultUrl = 'http://10.108.174.19:4000/api';
+const configuredUrl = Constants.expoConfig?.extra?.apiBaseUrl;
+if (typeof configuredUrl !== 'string' || !configuredUrl) {
+  throw new Error('Missing Expo configuration: extra.apiBaseUrl');
+}
 
-export const API_BASE_URL = defaultUrl;
+export const API_BASE_URL = configuredUrl.replace(/\/+$/, '');
+export const BACKEND_BASE_URL = API_BASE_URL.replace(/\/api\/?$/, '');
 const TOKEN_KEY = 'roxstar.auth.token';
 
 export const saveAuthToken = async (token: string): Promise<void> => {

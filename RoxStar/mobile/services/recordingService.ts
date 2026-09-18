@@ -12,18 +12,9 @@
  * localFileUri must never be exposed as a remotely accessible URL.
  */
 import { PermissionsAndroid, Platform } from 'react-native';
-import { requireNativeModule } from 'expo-modules-core';
 import { Directory, File, Paths } from 'expo-file-system';
 import { createAudioPlayer, type AudioPlayer } from 'expo-audio';
-
-// Native module exposed by AudioModule.kt (expo-modules-core auto-registration)
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const AudioModule = requireNativeModule<{
-  startRecording: (path: string) => Promise<boolean>;
-  stopRecording: () => Promise<boolean>;
-  cancelRecording: () => Promise<void>;
-  isRecording: () => boolean;
-}>('RoxstarAudio');
+import AudioModule from '../modules/roxstar-audio';
 
 // ─── Active player singleton ─────────────────────────────────────────────────
 let activePlayer: AudioPlayer | null = null;
