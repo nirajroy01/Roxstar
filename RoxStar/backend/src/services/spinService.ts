@@ -2,12 +2,22 @@ import Spin from '../models/Spin.js';
 import SpinParticipant from '../models/SpinParticipant.js';
 import RoomMember from '../models/RoomMember.js';
 import SpinEvent from '../models/SpinEvent.js';
+import { runtimeEvents } from '../socket/runtimeEvents.js';
 
 const activeTimers = new Map<string, NodeJS.Timeout>();
 
+const stopTimer = (roomId: string) => {
+  const timer = activeTimers.get(roomId);
+  if (timer) {
+    clearInterval(timer);
+    activeTimers.delete(roomId);
+  }
+};
+
 const finalizeSpin = async (spinId: string, roomId: string) => {
   const spin = await Spin.findById(spinId);
-  if (!spin || spin.status === 'COMPLETED') {
+  if (!spin || spin.status === 'COMPLETED' || spin.status === 'ABORTED') {
+    stopTimer(roomId);
     return;
   }
 
@@ -17,10 +27,7 @@ const finalizeSpin = async (spinId: string, roomId: string) => {
   if (!winner) {
     spin.status = 'ABORTED';
     await spin.save();
-    if (activeTimers.has(roomId)) {
-      clearInterval(activeTimers.get(roomId)!);
-      activeTimers.delete(roomId);
-    }
+    stopTimer(roomId);
     return;
   }
 
@@ -40,10 +47,13 @@ const finalizeSpin = async (spinId: string, roomId: string) => {
     data: { winnerUserId: winner.userId.toString() },
   });
 
-  if (activeTimers.has(roomId)) {
-    clearInterval(activeTimers.get(roomId)!);
-    activeTimers.delete(roomId);
-  }
+  runtimeEvents.emit('spin_event', {
+    roomId,
+    type: 'winner_announced',
+    payload: { winnerUserId: winner.userId.toString() },
+  });
+
+  stopTimer(roomId);
 };
 
 const eliminateOneParticipant = async (spinId: string, roomId: string) => {
@@ -61,7 +71,7 @@ const eliminateOneParticipant = async (spinId: string, roomId: string) => {
   const target = activeParticipants[0];
   target.status = 'ELIMINATED';
   target.eliminatedAt = new Date();
-  target.eliminationOrder = await SpinParticipant.countDocuments({ spinId, status: 'ELIMINATED' }) + 1;
+  target.eliminationOrder = (await SpinParticipant.countDocuments({ spinId, status: 'ELIMINATED' })) + 1;
   await target.save();
 
   await SpinEvent.create({
@@ -70,6 +80,12 @@ const eliminateOneParticipant = async (spinId: string, roomId: string) => {
     type: 'user_eliminated',
     userId: target.userId,
     data: { eliminationOrder: target.eliminationOrder },
+  });
+
+  runtimeEvents.emit('spin_event', {
+    roomId,
+    type: 'user_eliminated',
+    payload: { userId: target.userId.toString(), eliminationOrder: target.eliminationOrder },
   });
 
   const remaining = await SpinParticipant.countDocuments({ spinId, status: 'ACTIVE' });
@@ -83,14 +99,19 @@ export const startSpin = async (userId: string, roomId: string) => {
     throw new Error('Room ID is required');
   }
 
+  const existingCompletedSpin = await Spin.findOne({ roomId, status: 'COMPLETED' }).sort({ completedAt: -1 });
+  if (existingCompletedSpin) {
+    throw new Error('This room already has a completed spin');
+  }
+
+  const activeSpin = await Spin.findOne({ roomId, status: 'RUNNING' });
+  if (activeSpin) {
+    throw new Error('An active spin already exists');
+  }
+
   const roomMembers = await RoomMember.find({ roomId, isActive: true });
   if (roomMembers.length < 3 || roomMembers.length > 20) {
     throw new Error('Spin requires 3 to 20 participants');
-  }
-
-  const activeSpin = await Spin.findOne({ roomId, status: { $in: ['WAITING', 'RUNNING'] } });
-  if (activeSpin) {
-    throw new Error('An active spin already exists');
   }
 
   const roomOwner = await RoomMember.findOne({ roomId, userId, role: 'OWNER', isActive: true });
@@ -121,9 +142,13 @@ export const startSpin = async (userId: string, roomId: string) => {
     data: { participantCount: participantRecords.length },
   });
 
-  if (activeTimers.has(roomId)) {
-    clearInterval(activeTimers.get(roomId)!);
-  }
+  runtimeEvents.emit('spin_event', {
+    roomId,
+    type: 'spin_started',
+    payload: { participantCount: participantRecords.length },
+  });
+
+  stopTimer(roomId);
 
   const timer = setInterval(() => {
     void eliminateOneParticipant(spin._id.toString(), roomId);
@@ -135,7 +160,7 @@ export const startSpin = async (userId: string, roomId: string) => {
 };
 
 export const getSpinState = async (roomId: string) => {
-  const spin = await Spin.findOne({ roomId, status: { $in: ['RUNNING', 'COMPLETED'] } });
+  const spin = await Spin.findOne({ roomId, status: { $in: ['RUNNING', 'COMPLETED'] } }).sort({ startedAt: -1 });
   if (!spin) {
     return null;
   }

@@ -2,6 +2,14 @@ import Room from '../models/Room.js';
 import RoomMember from '../models/RoomMember.js';
 import User from '../models/User.js';
 
+const generateRoomCode = async (): Promise<string> => {
+  let code = '';
+  do {
+    code = Math.random().toString(36).slice(2, 8).toUpperCase();
+  } while (await Room.exists({ code }));
+  return code;
+};
+
 export const createRoom = async (ownerId: string, name: string) => {
   const cleanName = name?.trim();
   if (!cleanName) {
@@ -13,7 +21,7 @@ export const createRoom = async (ownerId: string, name: string) => {
     throw new Error('Owner not found');
   }
 
-  const code = Math.random().toString(36).slice(2, 8).toUpperCase();
+  const code = await generateRoomCode();
   const room = await Room.create({
     name: cleanName,
     ownerId,
@@ -65,15 +73,38 @@ export const leaveRoom = async (userId: string, roomId: string) => {
   member.leftAt = new Date();
   await member.save();
 
+  const room = await Room.findById(roomId);
+  if (room && room.ownerId.toString() === userId) {
+    const nextOwner = await RoomMember.findOne({ roomId, isActive: true, role: 'MEMBER' }).sort({ joinedAt: 1 });
+    if (nextOwner) {
+      nextOwner.role = 'OWNER';
+      await nextOwner.save();
+      room.ownerId = nextOwner.userId;
+      await room.save();
+    }
+  }
+
   return member;
 };
 
-export const getRoom = async (roomId: string) => {
+export const getRoom = async (roomId: string, requesterId?: string) => {
   const room = await Room.findById(roomId).lean();
   if (!room) {
     throw new Error('Room not found');
   }
 
+  if (requesterId) {
+    const isMember = await RoomMember.exists({ roomId, userId: requesterId, isActive: true });
+    if (!isMember) {
+      throw new Error('You are not a member of this room');
+    }
+  }
+
   const members = await RoomMember.find({ roomId, isActive: true }).populate('userId', 'name email').lean();
   return { ...room, members };
+};
+
+export const isRoomMember = async (roomId: string, userId: string): Promise<boolean> => {
+  const match = await RoomMember.exists({ roomId, userId, isActive: true });
+  return !!match;
 };

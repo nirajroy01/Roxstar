@@ -3,10 +3,33 @@ import { getGridFSBucket } from '../config/gridfs.js';
 import Draft from '../models/Draft.js';
 import RoomMember from '../models/RoomMember.js';
 
+export const canAccessDraft = async (draftId: string, userId: string): Promise<boolean> => {
+  const draft = await Draft.findById(draftId);
+  if (!draft) return false;
+
+  if (draft.userId.toString() === userId) return true;
+  if (!draft.roomId) return false;
+
+  return !!(await RoomMember.exists({ roomId: draft.roomId, userId, isActive: true }));
+};
+
 export const uploadAudioToDraft = async (draftId: string, fileBuffer: Buffer, mimetype: string) => {
+  if (!fileBuffer || fileBuffer.length === 0) {
+    throw new Error('Audio payload is empty');
+  }
+
   const draft = await Draft.findById(draftId);
   if (!draft) {
     throw new Error('Draft not found');
+  }
+
+  if (draft.audioFileId) {
+    const bucket = await getGridFSBucket();
+    try {
+      await bucket.delete(draft.audioFileId);
+    } catch {
+      // ignore stale file cleanup if the old GridFS record is missing
+    }
   }
 
   const bucket = await getGridFSBucket();
@@ -35,11 +58,9 @@ export const getDraftAudio = async (draftId: string, userId: string) => {
     throw new Error('Draft not found');
   }
 
-  if (draft.userId.toString() !== userId) {
-    const member = await RoomMember.findOne({ roomId: draft.roomId, userId, isActive: true });
-    if (!member) {
-      throw new Error('Unauthorized');
-    }
+  const hasAccess = await canAccessDraft(draftId, userId);
+  if (!hasAccess) {
+    throw new Error('Unauthorized');
   }
 
   if (!draft.audioFileId) {

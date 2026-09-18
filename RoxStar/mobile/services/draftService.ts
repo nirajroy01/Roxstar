@@ -1,6 +1,16 @@
 import { request } from './apiService';
 
-export const listDrafts = () => request('/drafts');
+export type Draft = {
+  _id: string;
+  name: string;
+  duration: number;
+  effect: string;
+  roomId?: string;
+  audioFileId?: string;
+  createdAt?: string;
+};
+
+export const listDrafts = () => request<Draft[]>('/drafts');
 
 export const createDraft = (payload: {
   name: string;
@@ -8,12 +18,12 @@ export const createDraft = (payload: {
   effect: string;
   roomId?: string;
 }) =>
-  request('/drafts', {
+  request<Draft>('/drafts', {
     method: 'POST',
     body: JSON.stringify(payload),
   });
 
-export const getDraft = (draftId: string) => request(`/drafts/${draftId}`);
+export const getDraft = (draftId: string) => request<Draft>(`/drafts/${draftId}`);
 
 export const deleteDraft = (draftId: string) =>
   request(`/drafts/${draftId}`, {

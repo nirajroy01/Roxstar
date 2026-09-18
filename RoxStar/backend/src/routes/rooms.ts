@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { authenticate } from '../middleware/auth.js';
-import { createRoom, getRoom, joinRoom, leaveRoom } from '../services/roomService.js';
+import { createRoom, getRoom, isRoomMember, joinRoom, leaveRoom } from '../services/roomService.js';
 
 const router = Router();
 
@@ -26,16 +26,22 @@ router.post('/:code/join', async (req, res, next) => {
 
 router.post('/:roomId/leave', async (req, res, next) => {
   try {
-    const member = await leaveRoom(req.user!.userId, req.params.roomId);
-    res.json(member);
+    const roomId = req.params.roomId;
+    const allowed = await isRoomMember(roomId, req.user!.userId);
+    if (!allowed) {
+      return res.status(403).json({ message: 'You are not a member of this room' });
+    }
+
+    const member = await leaveRoom(req.user!.userId, roomId);
+    return res.json(member);
   } catch (error) {
-    next(error);
+    return next(error);
   }
 });
 
 router.get('/:roomId', async (req, res, next) => {
   try {
-    const room = await getRoom(req.params.roomId);
+    const room = await getRoom(req.params.roomId, req.user!.userId);
     res.json(room);
   } catch (error) {
     next(error);

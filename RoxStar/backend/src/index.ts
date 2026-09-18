@@ -28,6 +28,7 @@ app.get('/health', (_req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/rooms', roomRoutes);
+app.use('/api/drafts/:draftId/audio', express.raw({ type: 'audio/*', limit: '25mb' }));
 app.use('/api/drafts', draftRoutes);
 app.use('/api/spins', spinRoutes);
 

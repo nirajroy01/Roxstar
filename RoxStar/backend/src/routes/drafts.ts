@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authenticate } from '../middleware/auth.js';
 import { createDraft, deleteDraft, getDraft, listDrafts } from '../services/draftService.js';
-import { getDraftAudio, uploadAudioToDraft } from '../services/audioService.js';
+import { canAccessDraft, getDraftAudio, uploadAudioToDraft } from '../services/audioService.js';
 
 const router = Router();
 
@@ -45,11 +45,15 @@ router.delete('/:draftId', async (req, res, next) => {
 
 router.post('/:draftId/audio', async (req, res, next) => {
   try {
-    const fileBuffer = req.body ? Buffer.from(req.body) : Buffer.alloc(0);
+    if (!(await canAccessDraft(req.params.draftId, req.user!.userId))) {
+      return res.status(403).json({ message: 'Unauthorized' });
+    }
+
+    const fileBuffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
     const result = await uploadAudioToDraft(req.params.draftId, fileBuffer, 'audio/wav');
-    res.json(result);
+    return res.json(result);
   } catch (error) {
-    next(error);
+    return next(error);
   }
 });
 

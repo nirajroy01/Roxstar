@@ -37,7 +37,11 @@ export const getDraft = async (draftId: string, userId: string) => {
     throw new Error('Draft not found');
   }
 
-  if (draft.userId.toString() !== userId) {
+  const isOwner = draft.userId.toString() === userId;
+  const isRoomMember = draft.roomId
+    ? !!(await RoomMember.exists({ roomId: draft.roomId, userId, isActive: true }))
+    : false;
+  if (!isOwner && !isRoomMember) {
     throw new Error('Unauthorized');
   }
 
