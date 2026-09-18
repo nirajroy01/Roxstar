@@ -1,7 +1,7 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
-// hello
+
 export default function RegisterScreen() {
   return (
     <View style={styles.container}>
