@@ -1,20 +1,22 @@
-// GRIDFS TEMPORARILY DISABLED — bucket.delete removed from deleteDraft.
-// When GridFS is re-enabled, restore the getGridFSBucket import and
-// the bucket.delete call inside deleteDraft.
-import { ObjectId } from 'mongodb';
+import { isValidObjectId } from 'mongoose';
 import Draft from '../models/Draft.js';
 import RoomMember from '../models/RoomMember.js';
+import { runtimeEvents } from '../socket/runtimeEvents.js';
 
 export const createDraft = async (
   userId: string,
   roomId: string | null,
-  data: { name: string; duration: number; effect: string; audioFileId?: string },
+  data: { name: string; duration: number; effect: string },
 ) => {
-  if (!data.name || !data.duration || !data.effect) {
+  const name = data.name?.trim();
+  if (!name || !Number.isFinite(data.duration) || data.duration <= 0 || !data.effect?.trim()) {
     throw new Error('Draft name, duration, and effect are required');
   }
 
   if (roomId) {
+    if (!isValidObjectId(roomId)) {
+      throw new Error('Invalid room ID');
+    }
     const isMember = await RoomMember.findOne({ roomId, userId, isActive: true });
     if (!isMember) {
       throw new Error('User is not a member of the room');
@@ -24,11 +26,10 @@ export const createDraft = async (
   const draft = await Draft.create({
     userId,
     roomId: roomId || undefined,
-    name: data.name,
+    name,
     duration: data.duration,
-    effect: data.effect,
-    // audioFileId preserved for future GridFS re-enable
-    audioFileId: data.audioFileId ? new ObjectId(data.audioFileId) : undefined,
+    effect: data.effect.trim(),
+    fileUrl: null,
   });
 
   return draft;
@@ -39,6 +40,9 @@ export const listDrafts = async (userId: string) => {
 };
 
 export const getDraft = async (draftId: string, userId: string) => {
+  if (!isValidObjectId(draftId)) {
+    throw new Error('Invalid draft ID');
+  }
   const draft = await Draft.findById(draftId);
   if (!draft) {
     throw new Error('Draft not found');
@@ -56,19 +60,35 @@ export const getDraft = async (draftId: string, userId: string) => {
 };
 
 export const deleteDraft = async (draftId: string, userId: string) => {
+  if (!isValidObjectId(draftId)) {
+    throw new Error('Invalid draft ID');
+  }
   const draft = await Draft.findOne({ _id: draftId, userId });
   if (!draft) {
     throw new Error('Draft not found');
   }
 
-  // GRIDFS DISABLED: bucket.delete skipped during local-storage phase.
-  // When GridFS is re-enabled, restore:
-  //   const bucket = await getGridFSBucket();
-  //   await bucket.delete(draft.audioFileId);
-  if (draft.audioFileId) {
-    console.warn('[GridFS disabled] Skipping audio file deletion for draft', draftId);
-  }
-
   await Draft.deleteOne({ _id: draftId });
   return { success: true };
+};
+
+export const shareDraftToRoom = async (draftId: string, roomId: string, userId: string) => {
+  if (!isValidObjectId(draftId) || !isValidObjectId(roomId)) {
+    throw new Error('Invalid draft or room ID');
+  }
+  const [draft, member] = await Promise.all([
+    Draft.findOne({ _id: draftId, userId }),
+    RoomMember.exists({ roomId, userId, isActive: true }),
+  ]);
+  if (!draft) throw new Error('Draft not found');
+  if (!member) throw new Error('User is not a member of the room');
+
+  draft.roomId = roomId as unknown as typeof draft.roomId;
+  await draft.save();
+  runtimeEvents.emit('room_event', {
+    roomId,
+    type: 'draft_shared',
+    payload: { draft: draft.toJSON() },
+  });
+  return draft;
 };

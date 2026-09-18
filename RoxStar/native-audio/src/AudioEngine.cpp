@@ -40,8 +40,8 @@ bool AudioEngine::startRecording(const std::string& outputPath) {
     return false;
   }
 
-  outputPath_ = outputPath;
   resetState();
+  outputPath_ = outputPath;
 
   stream_.open(outputPath_, std::ios::binary | std::ios::out | std::ios::trunc);
   if (!stream_) {

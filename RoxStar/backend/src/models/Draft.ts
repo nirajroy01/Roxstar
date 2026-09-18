@@ -6,10 +6,7 @@ export interface IDraft extends Document {
   name: string;
   duration: number;
   effect: string;
-  // fileUrl: null during local-storage phase; will be populated when GridFS is enabled.
   fileUrl: string | null;
-  // audioFileId: reserved for GridFS re-enable.
-  audioFileId?: mongoose.Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -22,7 +19,6 @@ const draftSchema = new Schema<IDraft>(
     duration: { type: Number, required: true },
     effect: { type: String, required: true },
     fileUrl: { type: String, default: null },
-    audioFileId: { type: Schema.Types.ObjectId }, // reserved for GridFS
   },
   { timestamps: true },
 );

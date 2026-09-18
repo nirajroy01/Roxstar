@@ -27,5 +27,9 @@ export const login = async (email: string, password: string) => {
 export const getCurrentUser = () => request<{ user: AuthUser }>('/auth/me');
 
 export const logout = async (): Promise<void> => {
-  await clearAuthToken();
+  try {
+    await request<{ success: boolean }>('/auth/logout', { method: 'POST' });
+  } finally {
+    await clearAuthToken();
+  }
 };

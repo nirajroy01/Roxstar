@@ -23,5 +23,9 @@ export const deleteDraft = (draftId: string) =>
     method: 'DELETE',
   });
 
-// getDraftAudio is intentionally omitted — remote audio is disabled during local-storage phase.
-// When GridFS is enabled, restore: request(`/drafts/${draftId}/audio`)
+export const shareDraft = (roomId: string, draftId: string) =>
+  request<Draft>(`/rooms/${roomId}/drafts`, {
+    method: 'POST',
+    body: JSON.stringify({ draftId }),
+  });
+

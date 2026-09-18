@@ -32,9 +32,11 @@ export const initializeSocket = (server: HttpServer) => {
     roomSocket(io, socket);
   });
 
-  runtimeEvents.on('spin_event', (event: RuntimeEvent) => {
+  const emitRoomEvent = (event: RuntimeEvent) => {
     io.to(event.roomId).emit(event.type, { roomId: event.roomId, ...event.payload });
-  });
+  };
+  runtimeEvents.on('spin_event', emitRoomEvent);
+  runtimeEvents.on('room_event', emitRoomEvent);
 
   return io;
 };

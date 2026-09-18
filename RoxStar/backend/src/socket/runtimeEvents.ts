@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 
 export type RuntimeEvent = {
   roomId: string;
-  type: 'spin_started' | 'user_eliminated' | 'winner_announced';
+  type: 'draft_shared' | 'spin_started' | 'user_eliminated' | 'winner_announced';
   payload: Record<string, unknown>;
 };
 

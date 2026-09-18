@@ -3,6 +3,8 @@ import SpinParticipant from '../models/SpinParticipant.js';
 import RoomMember from '../models/RoomMember.js';
 import SpinEvent from '../models/SpinEvent.js';
 import { runtimeEvents } from '../socket/runtimeEvents.js';
+import { isValidObjectId } from 'mongoose';
+import { isRoomMember } from './roomService.js';
 
 const activeTimers = new Map<string, NodeJS.Timeout>();
 
@@ -95,7 +97,7 @@ const eliminateOneParticipant = async (spinId: string, roomId: string) => {
 };
 
 export const startSpin = async (userId: string, roomId: string) => {
-  if (!roomId) {
+  if (!roomId || !isValidObjectId(roomId)) {
     throw new Error('Room ID is required');
   }
 
@@ -159,7 +161,13 @@ export const startSpin = async (userId: string, roomId: string) => {
   return spin;
 };
 
-export const getSpinState = async (roomId: string) => {
+export const getSpinState = async (roomId: string, requesterId: string) => {
+  if (!isValidObjectId(roomId)) {
+    throw new Error('Invalid room ID');
+  }
+  if (!(await isRoomMember(roomId, requesterId))) {
+    throw new Error('You are not a member of this room');
+  }
   const spin = await Spin.findOne({ roomId, status: { $in: ['RUNNING', 'COMPLETED'] } }).sort({ startedAt: -1 });
   if (!spin) {
     return null;
@@ -167,4 +175,11 @@ export const getSpinState = async (roomId: string) => {
 
   const participants = await SpinParticipant.find({ spinId: spin._id }).lean();
   return { spin, participants };
+};
+
+export const getSpinById = async (spinId: string, requesterId: string) => {
+  if (!isValidObjectId(spinId)) throw new Error('Invalid spin ID');
+  const spin = await Spin.findById(spinId).lean();
+  if (!spin) throw new Error('Spin not found');
+  return getSpinState(spin.roomId.toString(), requesterId);
 };

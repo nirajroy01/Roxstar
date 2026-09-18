@@ -1,6 +1,7 @@
 import Room from '../models/Room.js';
 import RoomMember from '../models/RoomMember.js';
 import User from '../models/User.js';
+import { isValidObjectId } from 'mongoose';
 
 const generateRoomCode = async (): Promise<string> => {
   let code = '';
@@ -52,18 +53,23 @@ export const joinRoom = async (userId: string, roomCode: string) => {
     return room;
   }
 
-  await RoomMember.create({
-    roomId: room._id,
-    userId,
-    role: 'MEMBER',
-    isActive: true,
-    joinedAt: new Date(),
-  });
+  const existingMember = await RoomMember.findOne({ roomId: room._id, userId });
+  if (existingMember) {
+    existingMember.isActive = true;
+    existingMember.leftAt = undefined;
+    existingMember.joinedAt = new Date();
+    await existingMember.save();
+  } else {
+    await RoomMember.create({ roomId: room._id, userId, role: 'MEMBER', isActive: true, joinedAt: new Date() });
+  }
 
   return room;
 };
 
 export const leaveRoom = async (userId: string, roomId: string) => {
+  if (!isValidObjectId(roomId)) {
+    throw new Error('Invalid room ID');
+  }
   const member = await RoomMember.findOne({ roomId, userId, isActive: true });
   if (!member) {
     throw new Error('Member not found in room');
@@ -88,6 +94,9 @@ export const leaveRoom = async (userId: string, roomId: string) => {
 };
 
 export const getRoom = async (roomId: string, requesterId?: string) => {
+  if (!isValidObjectId(roomId)) {
+    throw new Error('Invalid room ID');
+  }
   const room = await Room.findById(roomId).lean();
   if (!room) {
     throw new Error('Room not found');

@@ -75,8 +75,12 @@ export const startRecording = async (): Promise<string> => {
   ensureRecordingDir();
   const file = buildRecordingFile();
 
-  const ok = await AudioModule.startRecording(file.uri);
-  if (!ok) throw new Error('AudioEngine failed to open recording stream');
+  const nativePath = decodeURIComponent(file.uri.replace(/^file:\/\//, ''));
+  const ok = await AudioModule.startRecording(nativePath);
+  if (!ok) {
+    if (file.exists) file.delete();
+    throw new Error('AudioEngine failed to open recording stream');
+  }
 
   return file.uri;
 };

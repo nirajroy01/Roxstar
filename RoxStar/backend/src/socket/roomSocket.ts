@@ -14,11 +14,12 @@ export default function roomSocket(io: Server, socket: Socket) {
       return;
     }
 
-    socket.join(roomCode);
-    const roomMembers = io.sockets.adapter.rooms.get(roomCode);
-    io.to(roomCode).emit('user_joined', { userId: socket.id, roomCode });
+    const normalizedCode = room.code;
+    socket.join(normalizedCode);
+    const roomMembers = io.sockets.adapter.rooms.get(normalizedCode);
+    io.to(normalizedCode).emit('user_joined', { userId: socket.data.userId, roomCode: normalizedCode });
     io.to(socket.id).emit('room_state', {
-      roomCode,
+      roomCode: normalizedCode,
       members: roomMembers ? Array.from(roomMembers) : [],
     });
   });
@@ -32,17 +33,21 @@ export default function roomSocket(io: Server, socket: Socket) {
     socket.join(roomId);
   });
 
-  socket.on('leave_room', (roomCode: string) => {
-    socket.leave(roomCode);
-    io.to(roomCode).emit('user_left', { userId: socket.id, roomCode });
+  socket.on('leave_room', async (roomCode: string) => {
+    const room = await Room.findOne({ code: roomCode?.trim().toUpperCase() }).lean();
+    if (!room || !(await isMember(room._id.toString(), socket.data.userId))) return;
+    socket.leave(room.code);
+    socket.leave(room._id.toString());
+    io.to(room.code).emit('user_left', { userId: socket.data.userId, roomCode: room.code });
   });
 
   socket.on('draft_shared', async (payload: { roomId?: string; roomCode?: string }) => {
-    if (!payload?.roomId || !payload.roomCode || !(await isMember(payload.roomId, socket.data.userId))) {
+    const room = payload?.roomId ? await Room.findById(payload.roomId).lean() : null;
+    if (!room || !payload.roomCode || room.code !== payload.roomCode.trim().toUpperCase() || !(await isMember(payload.roomId!, socket.data.userId))) {
       socket.emit('room_error', { message: 'You are not a member of this room' });
       return;
     }
 
-    io.to(payload.roomCode).emit('draft_shared', payload);
+    io.to(room.code).emit('draft_shared', { ...payload, roomCode: room.code });
   });
 }

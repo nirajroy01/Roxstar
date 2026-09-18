@@ -34,5 +34,5 @@ Open the module in Android Studio and build the CMake project. The C++ layer is 
 ## Notes
 
 - MongoDB remains the persistent source of truth.
-- Audio upload and retrieval are GridFS-oriented.
+- Audio files remain local to each Android device; MongoDB persists Draft metadata only.
 - The backend owns spin elimination state instead of the frontend.

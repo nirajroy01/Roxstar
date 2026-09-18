@@ -12,9 +12,9 @@ import {
   View,
 } from 'react-native';
 import { AuthUser, getCurrentUser, login, logout } from './services/authService';
-import { createDraft, deleteDraft, listDrafts } from './services/draftService';
+import { createDraft, deleteDraft, listDrafts, shareDraft } from './services/draftService';
 import type { Draft } from './types/draft';
-import { createRoom, joinRoom, Room } from './services/roomService';
+import { createRoom, getRoom, joinRoom, Room } from './services/roomService';
 import { getSpinState, startSpin } from './services/spinService';
 import { connectSocket, disconnectSocket } from './services/socketService';
 import {
@@ -75,8 +75,18 @@ export default function App() {
     const subscribe = async () => {
       roomSocket = await connectSocket();
       if (!active || !roomSocket) return;
-      roomSocket.emit('join_room', room.code);
-      roomSocket.emit('join_room_id', room._id);
+      const restoreRoomState = () => {
+        roomSocket?.emit('join_room', room.code);
+        roomSocket?.emit('join_room_id', room._id);
+        void getRoom(room._id).then((nextRoom) => active && setRoom(nextRoom)).catch(() => undefined);
+      };
+      restoreRoomState();
+      roomSocket.on('connect', restoreRoomState);
+      roomSocket.on('draft_shared', (payload: { draft?: Draft }) => {
+        if (payload.draft?.userId === user.userId) {
+          setDrafts((current) => current.map((draft) => draft._id === payload.draft!._id ? { ...draft, roomId: room._id } : draft));
+        }
+      });
       roomSocket.on('user_eliminated', () => setSpinStatus('A participant was eliminated'));
       roomSocket.on('winner_announced', (payload: { winnerUserId?: string }) =>
         setSpinStatus(`Winner: ${payload.winnerUserId || 'announced'}`),
@@ -88,6 +98,8 @@ export default function App() {
       active = false;
       roomSocket?.off('user_eliminated');
       roomSocket?.off('winner_announced');
+      roomSocket?.off('draft_shared');
+      roomSocket?.off('connect', restoreRoomState);
       roomSocket?.emit('leave_room', room.code);
       disconnectSocket();
     };
@@ -250,6 +262,20 @@ export default function App() {
       setRoomCode('');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unable to join room');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleShareDraft = async (draft: Draft) => {
+    if (!room) return;
+    setSubmitting(true);
+    setError('');
+    try {
+      await shareDraft(room._id, draft._id);
+      setDrafts((current) => current.map((item) => item._id === draft._id ? { ...item, roomId: room._id } : item));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Unable to share draft');
     } finally {
       setSubmitting(false);
     }
@@ -477,6 +503,11 @@ export default function App() {
                     <Text style={styles.iconButtonText}>
                       {playingId === draft._id ? '⏸' : '▶'}
                     </Text>
+                  </Pressable>
+                )}
+                {room && !draft.roomId && (
+                  <Pressable disabled={submitting} onPress={() => void handleShareDraft(draft)} style={styles.iconButton}>
+                    <Text style={styles.iconButtonText}>↗</Text>
                   </Pressable>
                 )}
                 <Pressable onPress={() => handleDeleteDraft(draft)} style={styles.iconButton}>
