@@ -1,7 +1,7 @@
-import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 
-const defaultUrl = Platform.OS === 'android' ? 'http://10.0.2.2:4000/api' : 'http://localhost:4000/api';
+// 10.0.2.2 only works for the Android emulator. Physical devices need the host machine's LAN IP.
+const defaultUrl = 'http://10.108.174.19:4000/api';
 
 export const API_BASE_URL = defaultUrl;
 const TOKEN_KEY = 'roxstar.auth.token';
@@ -39,4 +39,3 @@ export async function request<T>(endpoint: string, options: RequestInit = {}): P
   return data as T;
 }
 
-export const isAndroid = Platform.OS === 'android';

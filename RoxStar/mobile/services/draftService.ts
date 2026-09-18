@@ -1,14 +1,7 @@
 import { request } from './apiService';
+import type { Draft } from '../types/draft';
 
-export type Draft = {
-  _id: string;
-  name: string;
-  duration: number;
-  effect: string;
-  roomId?: string;
-  audioFileId?: string;
-  createdAt?: string;
-};
+export type { Draft };
 
 export const listDrafts = () => request<Draft[]>('/drafts');
 
@@ -30,4 +23,5 @@ export const deleteDraft = (draftId: string) =>
     method: 'DELETE',
   });
 
-export const getDraftAudio = (draftId: string) => request(`/drafts/${draftId}/audio`);
+// getDraftAudio is intentionally omitted — remote audio is disabled during local-storage phase.
+// When GridFS is enabled, restore: request(`/drafts/${draftId}/audio`)

@@ -1,9 +1,15 @@
+// GRIDFS TEMPORARILY DISABLED — bucket.delete removed from deleteDraft.
+// When GridFS is re-enabled, restore the getGridFSBucket import and
+// the bucket.delete call inside deleteDraft.
 import { ObjectId } from 'mongodb';
 import Draft from '../models/Draft.js';
 import RoomMember from '../models/RoomMember.js';
-import { getGridFSBucket } from '../config/gridfs.js';
 
-export const createDraft = async (userId: string, roomId: string | null, data: { name: string; duration: number; effect: string; audioFileId?: string }) => {
+export const createDraft = async (
+  userId: string,
+  roomId: string | null,
+  data: { name: string; duration: number; effect: string; audioFileId?: string },
+) => {
   if (!data.name || !data.duration || !data.effect) {
     throw new Error('Draft name, duration, and effect are required');
   }
@@ -21,6 +27,7 @@ export const createDraft = async (userId: string, roomId: string | null, data: {
     name: data.name,
     duration: data.duration,
     effect: data.effect,
+    // audioFileId preserved for future GridFS re-enable
     audioFileId: data.audioFileId ? new ObjectId(data.audioFileId) : undefined,
   });
 
@@ -54,13 +61,12 @@ export const deleteDraft = async (draftId: string, userId: string) => {
     throw new Error('Draft not found');
   }
 
+  // GRIDFS DISABLED: bucket.delete skipped during local-storage phase.
+  // When GridFS is re-enabled, restore:
+  //   const bucket = await getGridFSBucket();
+  //   await bucket.delete(draft.audioFileId);
   if (draft.audioFileId) {
-    const bucket = await getGridFSBucket();
-    try {
-      await bucket.delete(draft.audioFileId);
-    } catch (error) {
-      console.warn('GridFS delete skipped', error);
-    }
+    console.warn('[GridFS disabled] Skipping audio file deletion for draft', draftId);
   }
 
   await Draft.deleteOne({ _id: draftId });
