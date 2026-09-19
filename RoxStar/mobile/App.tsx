@@ -18,17 +18,22 @@ import { createRoom, getRoom, joinRoom, Room } from './services/roomService';
 import { getSpinState, startSpin } from './services/spinService';
 import { connectSocket, disconnectSocket } from './services/socketService';
 import {
+  attachLocalDraftFiles,
   cancelRecording,
   deleteLocalRecording,
+  getLastRecordingDuration,
   isRecording,
   playLocalDraft,
+  removeLocalDraftFile,
+  type RecordingEffect,
+  saveLocalDraftFile,
   startRecording,
   stopLocalPlayback,
   stopRecording,
 } from './services/recordingService';
 
 // ─── Recording state machine ──────────────────────────────────────────────────
-type RecordState = 'idle' | 'recording' | 'stopping';
+type RecordState = 'idle' | 'starting' | 'recording' | 'stopping';
 
 export default function App() {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -45,6 +50,7 @@ export default function App() {
 
   // Recording
   const [recordState, setRecordState] = useState<RecordState>('idle');
+  const [recordingEffect, setRecordingEffect] = useState<RecordingEffect>('clean');
   const [recordSeconds, setRecordSeconds] = useState(0);
   const [playingId, setPlayingId] = useState<string | null>(null);
   const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -56,7 +62,7 @@ export default function App() {
       try {
         const result = await getCurrentUser();
         setUser(result.user);
-        setDrafts(await listDrafts());
+        setDrafts(await attachLocalDraftFiles(await listDrafts()));
       } catch {
         setUser(null);
       } finally {
@@ -66,44 +72,82 @@ export default function App() {
     void restoreSession();
   }, []);
 
+  useEffect(() => () => {
+    if (recordTimerRef.current) {
+      clearInterval(recordTimerRef.current);
+    }
+    stopLocalPlayback();
+    if (isRecording()) {
+      void cancelRecording();
+    }
+  }, []);
+
   // ─── Socket subscription ────────────────────────────────────────────────────
   useEffect(() => {
     if (!user || !room) return;
     let active = true;
     let roomSocket: Awaited<ReturnType<typeof connectSocket>> | null = null;
+    const roomId = room._id;
+    const roomCode = room.code;
+
+    const refreshRoom = () => {
+      void getRoom(roomId).then((nextRoom) => active && setRoom(nextRoom)).catch(() => undefined);
+    };
+
+    const restoreRoomState = () => {
+      roomSocket?.emit('join_room', roomCode);
+      roomSocket?.emit('join_room_id', roomId);
+      refreshRoom();
+    };
+
+    const handleDraftShared = (payload: { draft?: Draft }) => {
+      if (payload.draft?.userId === user.userId) {
+        setDrafts((current) => current.map((draft) => draft._id === payload.draft!._id ? { ...draft, roomId } : draft));
+      }
+    };
+
+    const handleSpinStarted = (payload: { participantCount?: number }) => {
+      const participantLabel = payload.participantCount ? ` (${payload.participantCount} participants)` : '';
+      setSpinStatus(`Spin running${participantLabel}`);
+    };
+
+    const handleUserEliminated = () => setSpinStatus('A participant was eliminated');
+    const handleWinnerAnnounced = (payload: { winnerUserId?: string }) =>
+      setSpinStatus(`Winner: ${payload.winnerUserId || 'announced'}`);
+    const handleRoomError = (payload: { message?: string }) =>
+      setError(payload.message || 'Unable to connect to the room');
 
     const subscribe = async () => {
       roomSocket = await connectSocket();
       if (!active || !roomSocket) return;
-      const restoreRoomState = () => {
-        roomSocket?.emit('join_room', room.code);
-        roomSocket?.emit('join_room_id', room._id);
-        void getRoom(room._id).then((nextRoom) => active && setRoom(nextRoom)).catch(() => undefined);
-      };
       restoreRoomState();
       roomSocket.on('connect', restoreRoomState);
-      roomSocket.on('draft_shared', (payload: { draft?: Draft }) => {
-        if (payload.draft?.userId === user.userId) {
-          setDrafts((current) => current.map((draft) => draft._id === payload.draft!._id ? { ...draft, roomId: room._id } : draft));
-        }
-      });
-      roomSocket.on('user_eliminated', () => setSpinStatus('A participant was eliminated'));
-      roomSocket.on('winner_announced', (payload: { winnerUserId?: string }) =>
-        setSpinStatus(`Winner: ${payload.winnerUserId || 'announced'}`),
-      );
+      roomSocket.on('room_state', refreshRoom);
+      roomSocket.on('user_joined', refreshRoom);
+      roomSocket.on('user_left', refreshRoom);
+      roomSocket.on('draft_shared', handleDraftShared);
+      roomSocket.on('spin_started', handleSpinStarted);
+      roomSocket.on('user_eliminated', handleUserEliminated);
+      roomSocket.on('winner_announced', handleWinnerAnnounced);
+      roomSocket.on('room_error', handleRoomError);
     };
 
     void subscribe();
     return () => {
       active = false;
-      roomSocket?.off('user_eliminated');
-      roomSocket?.off('winner_announced');
-      roomSocket?.off('draft_shared');
+      roomSocket?.off('room_state', refreshRoom);
+      roomSocket?.off('user_joined', refreshRoom);
+      roomSocket?.off('user_left', refreshRoom);
+      roomSocket?.off('draft_shared', handleDraftShared);
+      roomSocket?.off('spin_started', handleSpinStarted);
+      roomSocket?.off('user_eliminated', handleUserEliminated);
+      roomSocket?.off('winner_announced', handleWinnerAnnounced);
+      roomSocket?.off('room_error', handleRoomError);
       roomSocket?.off('connect', restoreRoomState);
-      roomSocket?.emit('leave_room', room.code);
+      roomSocket?.emit('leave_room', roomCode);
       disconnectSocket();
     };
-  }, [user, room]);
+  }, [user?.userId, room?._id, room?.code]);
 
   // ─── Recording timer ────────────────────────────────────────────────────────
   const startTimer = () => {
@@ -123,13 +167,16 @@ export default function App() {
 
   // ─── Recording actions ──────────────────────────────────────────────────────
   const handleStartRecording = async () => {
+    if (recordState !== 'idle') return;
+    setRecordState('starting');
     setError('');
     try {
-      const path = await startRecording();
+      const path = await startRecording(recordingEffect);
       currentPathRef.current = path;
       setRecordState('recording');
       startTimer();
     } catch (e) {
+      setRecordState('idle');
       setError(e instanceof Error ? e.message : 'Failed to start recording');
     }
   };
@@ -141,22 +188,45 @@ export default function App() {
     try {
       const ok = await stopRecording();
       if (!ok || !currentPathRef.current) {
+        if (currentPathRef.current) {
+          deleteLocalRecording(currentPathRef.current);
+          currentPathRef.current = null;
+        }
         setError('Recording could not be saved');
         setRecordState('idle');
         return;
       }
 
       const localUri = currentPathRef.current;
-      const durationSec = recordSeconds || 1;
+      const durationSec = Math.max(0.1, Number(getLastRecordingDuration().toFixed(1)));
       const draftName = `Take ${new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`;
 
-      // Save metadata to MongoDB — fileUrl stays null (local phase)
-      const draft = await createDraft({ name: draftName, duration: durationSec, effect: 'clean' });
+      let draft: Draft;
+      try {
+        draft = await createDraft({ name: draftName, duration: durationSec, effect: recordingEffect });
+      } catch (cause) {
+        deleteLocalRecording(localUri);
+        currentPathRef.current = null;
+        throw cause;
+      }
+
       // Attach local URI client-side only
       const draftWithLocal: Draft = { ...draft, localFileUri: localUri };
       setDrafts((prev) => [draftWithLocal, ...prev]);
       currentPathRef.current = null;
+      try {
+        await saveLocalDraftFile(draft._id, localUri);
+      } catch {
+        setError('Draft saved, but its local audio link could not be persisted.');
+      }
     } catch (e) {
+      if (currentPathRef.current) {
+        if (isRecording()) {
+          await cancelRecording().catch(() => undefined);
+        }
+        deleteLocalRecording(currentPathRef.current);
+        currentPathRef.current = null;
+      }
       setError(e instanceof Error ? e.message : 'Failed to save draft');
     } finally {
       setRecordState('idle');
@@ -203,8 +273,9 @@ export default function App() {
             }
             await deleteDraft(draft._id);
             if (draft.localFileUri) {
-              await deleteLocalRecording(draft.localFileUri);
+              deleteLocalRecording(draft.localFileUri);
             }
+            await removeLocalDraftFile(draft._id);
             setDrafts((prev) => prev.filter((d) => d._id !== draft._id));
           } catch (e) {
             setError(e instanceof Error ? e.message : 'Delete failed');
@@ -221,7 +292,7 @@ export default function App() {
     try {
       const result = await login(email.trim(), password);
       setUser(result.user);
-      setDrafts(await listDrafts());
+      setDrafts(await attachLocalDraftFiles(await listDrafts()));
       setPassword('');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unable to sign in');
@@ -231,7 +302,14 @@ export default function App() {
   };
 
   const handleLogout = async () => {
+    stopTimer();
     stopLocalPlayback();
+    if (isRecording()) {
+      await cancelRecording();
+    }
+    currentPathRef.current = null;
+    setRecordState('idle');
+    setRecordSeconds(0);
     await logout();
     setUser(null);
     setDrafts([]);
@@ -391,6 +469,24 @@ export default function App() {
           {recordState === 'idle' && (
             <>
               <Text style={styles.panelBody}>Tap record to capture a voice draft locally.</Text>
+              <View style={styles.effectSelector}>
+                {(['clean', 'echo'] as const).map((effect) => {
+                  const selected = recordingEffect === effect;
+                  return (
+                    <Pressable
+                      key={effect}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected }}
+                      onPress={() => setRecordingEffect(effect)}
+                      style={[styles.effectOption, selected && styles.effectOptionSelected]}
+                    >
+                      <Text style={[styles.effectOptionText, selected && styles.effectOptionTextSelected]}>
+                        {effect === 'clean' ? 'Clean' : 'Echo'}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
               <Pressable onPress={() => void handleStartRecording()} style={styles.recordButton}>
                 <Text style={styles.recordButtonText}>⏺  Record</Text>
               </Pressable>
@@ -415,6 +511,13 @@ export default function App() {
                 </Pressable>
               </View>
             </>
+          )}
+
+          {recordState === 'starting' && (
+            <View style={{ alignItems: 'center', paddingVertical: 16 }}>
+              <ActivityIndicator color="#ef4444" />
+              <Text style={[styles.panelBody, { marginTop: 8 }]}>Starting microphone...</Text>
+            </View>
           )}
 
           {recordState === 'stopping' && (
@@ -558,6 +661,14 @@ const styles = StyleSheet.create({
   },
   panelTitle: { color: '#f8fafc', fontSize: 18, fontWeight: '700', marginBottom: 8 },
   panelBody: { color: '#cbd5e1', fontSize: 14, lineHeight: 22 },
+  effectSelector: {
+    flexDirection: 'row', borderColor: '#475569', borderRadius: 8,
+    borderWidth: 1, marginTop: 12, overflow: 'hidden',
+  },
+  effectOption: { flex: 1, alignItems: 'center', justifyContent: 'center', minHeight: 40 },
+  effectOptionSelected: { backgroundColor: '#fbbf24' },
+  effectOptionText: { color: '#cbd5e1', fontSize: 14, fontWeight: '700' },
+  effectOptionTextSelected: { color: '#101828' },
   recordButton: {
     marginTop: 12, alignItems: 'center', backgroundColor: '#ef4444',
     borderRadius: 10, minHeight: 46, justifyContent: 'center',

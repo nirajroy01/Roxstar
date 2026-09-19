@@ -6,14 +6,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(oboe REQUIRED CONFIG)
 
-set(NATIVE_AUDIO_DIR
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../../native-audio")
-
-add_library(roxstar_audio STATIC
-    ${NATIVE_AUDIO_DIR}/src/AudioEngine.cpp
+get_filename_component(
+    NATIVE_AUDIO_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../../../native-audio"
+    ABSOLUTE
 )
-set_target_properties(roxstar_audio PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_include_directories(roxstar_audio PUBLIC ${NATIVE_AUDIO_DIR}/include)
+
+add_subdirectory(
+    "${NATIVE_AUDIO_DIR}"
+    "${CMAKE_CURRENT_BINARY_DIR}/native-audio"
+)
 
 add_library(roxstar_audio_jni SHARED roxstar_audio_jni.cpp)
-target_link_libraries(roxstar_audio_jni roxstar_audio oboe::oboe log android)
+target_link_libraries(roxstar_audio_jni roxstar_audio log android)

@@ -19,15 +19,29 @@ class AudioModule : Module() {
       nativeCancelRecording()
     }
 
+    Function("setEffect") { effect: String ->
+      nativeSetEffect(effect)
+    }
+
     Function("isRecording") {
       nativeIsRecording()
+    }
+
+    Function("getLastRecordingDuration") {
+      nativeGetLastRecordingDuration()
+    }
+
+    OnDestroy {
+      nativeCancelRecording()
     }
   }
 
   private external fun nativeStartRecording(path: String): Boolean
   private external fun nativeStopRecording(): Boolean
   private external fun nativeCancelRecording(): Boolean
+  private external fun nativeSetEffect(effect: String): Boolean
   private external fun nativeIsRecording(): Boolean
+  private external fun nativeGetLastRecordingDuration(): Double
 
   companion object {
     init {

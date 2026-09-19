@@ -3,6 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "main": "expo/AppEntry",
+  "expo": {
+    "autolinking": {
+      "nativeModulesDir": "./modules"
+    }
+  },
   "scripts": {
     "start": "expo start --clear",
     "android": "expo run:android",

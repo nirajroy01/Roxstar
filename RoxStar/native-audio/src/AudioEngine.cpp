@@ -1,5 +1,7 @@
 #include "AudioEngine.h"
 
+#include <array>
+#include <chrono>
 #include <cstdio>
 #include <fstream>
 
@@ -32,15 +34,18 @@ AudioEngine::~AudioEngine() {
 }
 
 bool AudioEngine::startRecording(const std::string& outputPath) {
+  std::lock_guard<std::mutex> lock(lifecycleMutex_);
   if (outputPath.empty()) {
     return false;
   }
 
-  if (recording_) {
+  if (recording_.load(std::memory_order_acquire)) {
     return false;
   }
 
   resetState();
+  echoEffect_.reset();
+  lastRecordingDuration_.store(0.0, std::memory_order_release);
   outputPath_ = outputPath;
 
   stream_.open(outputPath_, std::ios::binary | std::ios::out | std::ios::trunc);
@@ -49,34 +54,69 @@ bool AudioEngine::startRecording(const std::string& outputPath) {
     return false;
   }
 
-  if (!writeWavHeader()) {
-    stream_.close();
-    resetState();
+  if (!openAudioStream()) {
+    cancelRecordingLocked();
     return false;
   }
 
-  recording_ = true;
+  sampleRate_ = static_cast<std::uint32_t>(audioStream_->getSampleRate());
+  channels_ = static_cast<std::uint16_t>(audioStream_->getChannelCount());
+  echoEffect_.configure(static_cast<float>(sampleRate_));
+  if (!writeWavHeader()) {
+    cancelRecordingLocked();
+    return false;
+  }
+
+  if (!startWriter()) {
+    cancelRecordingLocked();
+    return false;
+  }
+  recording_.store(true, std::memory_order_release);
+  const oboe::Result result = audioStream_->requestStart();
+  if (result != oboe::Result::OK) {
+    cancelRecordingLocked();
+    return false;
+  }
+
   return true;
 }
 
 bool AudioEngine::stopRecording() {
-  if (!recording_ && !stream_.is_open()) {
+  std::lock_guard<std::mutex> lock(lifecycleMutex_);
+  if (!recording_.load(std::memory_order_acquire) && !stream_.is_open()) {
     return false;
   }
 
-  if (recording_) {
-    if (!finalizeWav()) {
-      return false;
+  recording_.store(false, std::memory_order_release);
+  closeAudioStream();
+  stopWriter();
+
+  const bool finalized = !writeError_.load(std::memory_order_acquire) &&
+      stream_.is_open() && finalizeWav();
+  if (finalized) {
+    const double denominator = static_cast<double>(sampleRate_) * channels_;
+    lastRecordingDuration_.store(totalSamples_ / denominator, std::memory_order_release);
+  } else if (!outputPath_.empty()) {
+    if (stream_.is_open()) {
+      stream_.close();
     }
+    std::remove(outputPath_.c_str());
   }
 
-  stream_.close();
-  recording_ = false;
-  outputPath_.clear();
-  return true;
+  resetState();
+  return finalized;
 }
 
 bool AudioEngine::cancelRecording() {
+  std::lock_guard<std::mutex> lock(lifecycleMutex_);
+  return cancelRecordingLocked();
+}
+
+bool AudioEngine::cancelRecordingLocked() {
+  recording_.store(false, std::memory_order_release);
+  closeAudioStream();
+  stopWriter();
+
   if (stream_.is_open()) {
     stream_.close();
   }
@@ -85,13 +125,29 @@ bool AudioEngine::cancelRecording() {
     std::remove(outputPath_.c_str());
   }
 
-  recording_ = false;
   resetState();
   return true;
 }
 
+bool AudioEngine::setEffect(const std::string& effect) {
+  std::lock_guard<std::mutex> lock(lifecycleMutex_);
+  if (recording_.load(std::memory_order_acquire)) {
+    return false;
+  }
+
+  if (effect == "clean") {
+    effect_ = Effect::Clean;
+    return true;
+  }
+  if (effect == "echo") {
+    effect_ = Effect::Echo;
+    return true;
+  }
+  return false;
+}
+
 bool AudioEngine::writeSamples(const std::int16_t* samples, std::size_t sampleCount) {
-  if (!recording_ || !samples || sampleCount == 0) {
+  if (!samples || sampleCount == 0) {
     return false;
   }
 
@@ -109,7 +165,97 @@ bool AudioEngine::writeSamples(const std::int16_t* samples, std::size_t sampleCo
 }
 
 bool AudioEngine::isRecording() const {
-  return recording_;
+  return recording_.load(std::memory_order_acquire);
+}
+
+double AudioEngine::lastRecordingDuration() const {
+  return lastRecordingDuration_.load(std::memory_order_acquire);
+}
+
+oboe::DataCallbackResult AudioEngine::onAudioReady(
+    oboe::AudioStream* /*stream*/,
+    void* audioData,
+    std::int32_t numFrames) {
+  if (!recording_.load(std::memory_order_acquire) ||
+      writeError_.load(std::memory_order_acquire)) {
+    return oboe::DataCallbackResult::Stop;
+  }
+
+  if (numFrames > 0) {
+    auto* samples = static_cast<std::int16_t*>(audioData);
+    const auto sampleCount = static_cast<std::size_t>(numFrames) * channels_;
+    if (effect_ == Effect::Echo) {
+      echoEffect_.process(samples, sampleCount);
+    }
+    if (!pcmQueue_.push(samples, sampleCount)) {
+      writeError_.store(true, std::memory_order_release);
+      recording_.store(false, std::memory_order_release);
+      return oboe::DataCallbackResult::Stop;
+    }
+    writerSignal_.notify_one();
+  }
+  return oboe::DataCallbackResult::Continue;
+}
+
+bool AudioEngine::openAudioStream() {
+  oboe::AudioStreamBuilder builder;
+  builder.setDirection(oboe::Direction::Input)
+      ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
+      ->setSharingMode(oboe::SharingMode::Exclusive)
+      ->setFormat(oboe::AudioFormat::I16)
+      ->setChannelCount(oboe::ChannelCount::Mono)
+      ->setSampleRate(static_cast<std::int32_t>(sampleRate_))
+      ->setDataCallback(this);
+
+  return builder.openStream(audioStream_) == oboe::Result::OK;
+}
+
+void AudioEngine::closeAudioStream() {
+  if (!audioStream_) {
+    return;
+  }
+
+  audioStream_->requestStop();
+  audioStream_->close();
+  audioStream_.reset();
+}
+
+bool AudioEngine::startWriter() {
+  pcmQueue_.reset();
+  writeError_.store(false, std::memory_order_release);
+  writerRunning_.store(true, std::memory_order_release);
+  try {
+    writerThread_ = std::thread(&AudioEngine::writerLoop, this);
+  } catch (...) {
+    writerRunning_.store(false, std::memory_order_release);
+    return false;
+  }
+  return true;
+}
+
+void AudioEngine::stopWriter() {
+  writerRunning_.store(false, std::memory_order_release);
+  writerSignal_.notify_one();
+  if (writerThread_.joinable()) {
+    writerThread_.join();
+  }
+}
+
+void AudioEngine::writerLoop() {
+  std::array<std::int16_t, 2048> samples{};
+  while (writerRunning_.load(std::memory_order_acquire) || !pcmQueue_.empty()) {
+    const std::size_t count = pcmQueue_.pop(samples.data(), samples.size());
+    if (count > 0) {
+      if (!writeSamples(samples.data(), count)) {
+        writeError_.store(true, std::memory_order_release);
+        recording_.store(false, std::memory_order_release);
+      }
+      continue;
+    }
+
+    std::unique_lock<std::mutex> lock(writerSignalMutex_);
+    writerSignal_.wait_for(lock, std::chrono::milliseconds(10));
+  }
 }
 
 bool AudioEngine::writeWavHeader() {
@@ -133,7 +279,7 @@ bool AudioEngine::finalizeWav() {
 
   stream_.flush();
 
-  const std::uint32_t dataSize = totalSamples_ * channels_ * (bitsPerSample_ / 8);
+  const std::uint32_t dataSize = totalSamples_ * (bitsPerSample_ / 8);
   const std::uint32_t riffSize = 36 + dataSize;
 
   WavHeader header{};
@@ -158,7 +304,9 @@ void AudioEngine::resetState() {
     stream_.close();
   }
   outputPath_.clear();
-  recording_ = false;
+  pcmQueue_.reset();
+  writeError_.store(false, std::memory_order_release);
+  recording_.store(false, std::memory_order_release);
 }
 
 }  // namespace roxstar
